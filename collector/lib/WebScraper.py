@@ -1,5 +1,3 @@
-import time
-
 import gevent
 from gevent import monkey
 monkey.patch_all()
@@ -8,68 +6,16 @@ from bs4 import BeautifulSoup
 import requests
 import logging
 import zmq
-import json
+import time
 
 
 logging.basicConfig(level=logging.INFO)
 
 
-class WebScraper:
-    def __init__(self, root_url):
-        self.root_url = root_url
-        self.url = None
-        self.count = 0
-        self.move_forward = True
-        self.last_empty_count = 0
-        self.last_empty_data = None
-
-    def prepare_url(self):
-        self.count += 1
-        return f"{self.root_url}{self.count}/"
-
-    def collect(self):
-        """ collect from internet """
-        response = requests.get(self.url)
-        soup = BeautifulSoup(response.content, "html.parser")
-        try:
-            result = soup.find(class_='article-head').find("h1")
-            return result.text
-        except Exception as e:
-            print(e)
-            if self.last_empty_count == 0:
-                self.last_empty_data = self.count - 1
-            self.last_empty_count += 1
-            if self.last_empty_count >= 100:
-                self.move_forward = False
-            return None
-
-    def forwarder(self, result):
-        """ send to zmq port """
-        if result:
-            with open("sample.txt", "a") as file_object:
-                file_object.write("\n")
-                file_object.write(f"{self.count}, {self.url}, {result}")
-
-    def start_service(self):
-        if self.move_forward:
-            self.url = self.prepare_url()
-            result = self.collect()
-            self.forwarder(result)
-        else:
-            return "break"
-
-    def start_loop(self):
-        """ start loop """
-        while True:
-            ret = self.start_service()
-            if ret == "break":
-                print(self.last_empty_data, self.last_empty_count, self.count)
-                break
-
-
 class WebScraperAsync:
-    def __init__(self, root_url, task_count=100):
+    def __init__(self, root_url, title_class, task_count=100):
         self.root_url = root_url
+        self.title_class = title_class
         self.urls = None
         self.count = 0
         self.task_count = task_count
@@ -82,12 +28,18 @@ class WebScraperAsync:
         self.count += 1
         self.urls = [f"{self.root_url}{i}/" for i in range(start, end)]
 
-    @staticmethod
-    def web_request(url):
+    def web_request(self, url):
         resp = requests.get(url)
         if resp.status_code in [404, 429]:
             return
-        return url, resp.status_code
+        try:
+            soup = BeautifulSoup(resp.content, "html.parser")
+            title = soup.find(class_=self.title_class)
+            pub_date = soup.find(class_="pub-date")
+            return title.text, url, pub_date.text
+        except Exception as e:
+            print(e)
+            return
 
     def forward_data(self, result):
         logging.info("Sending message to the server")
@@ -101,7 +53,7 @@ class WebScraperAsync:
 
     def prepare_tasks(self):
         self.prepare_urls()
-        tasks = [gevent.spawn(WebScraperAsync.web_request, url) for url in self.urls]
+        tasks = [gevent.spawn(self.web_request, url) for url in self.urls]
         return tasks
 
     def start_service(self):
@@ -117,7 +69,7 @@ class WebScraperAsync:
         logging.info("Starting service")
         context = zmq.Context()
         #  Socket to talk to server
-        print("Connecting to storage server…")
+        logging.info("Connecting to storage server…")
         self.socket = context.socket(zmq.REQ)
         self.socket.connect("tcp://192.168.1.70:5550")
         while True:

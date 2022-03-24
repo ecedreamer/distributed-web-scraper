@@ -1,7 +1,6 @@
 import logging
 from .DatabaseInterface import DatabaseInterface
 import zmq
-import json
 
 
 logging.basicConfig(level=logging.INFO)
@@ -12,21 +11,22 @@ class StorageService:
         self.db_name = db_name
         self.connection_timeout = 60 # in second
         self.socket = None
-
-    def connect_db(self):
         self.dbi = DatabaseInterface(self.db_name)
+        self.dbi.connect()
 
     def validate_data(self):
         # check if exists already in db
         pass
 
     def add_record(self, data):
-        logging.info(data)
+        self.dbi.add_many(data)
 
     def listen_port(self):
         message = self.socket.recv_json()
-        self.add_record(message)
-        self.socket.send(b"Received")
+        if message:
+            self.socket.send(b"Received")
+            self.add_record(message)
+
 
     def start_loop(self):
         logging.info("Starting storage service")
